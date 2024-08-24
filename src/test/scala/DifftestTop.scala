@@ -21,7 +21,6 @@ import chisel3._
 import java.nio.file.{Files, Paths}
 import scala.annotation.tailrec
 import org.json4s.DefaultFormats
-import org.json4s.native.JsonMethods.parse
 
 // Main class to generate difftest modules when design is not written in chisel.
 class DifftestTop extends Module {
@@ -61,8 +60,20 @@ class DifftestTop extends Module {
 
 // Generate simulation interface based on Profile describing the instantiated information of design
 class SimTop(profileName: String, numCores: Int) extends Module {
-  val profileStr = Files.readString(Paths.get(profileName))
-  val profiles = parse(profileStr).extract[List[Map[String, Any]]](DefaultFormats, manifest[List[Map[String, Any]]])
+  val profileStr = Files.readString(Paths.get(profileName)) // 从 profile 文件中读取字符串
+  // profile 是 json 格式的
+  // 他实际上会 filter 这样的数据
+  // Map(
+  //   "className" -> "MyClass",
+  //   "delay" -> 10,
+  //   "param1" -> 42,
+  //   "param2" -> BigInt(100)
+  // )
+  val profiles = org.json4s.native.JsonMethods
+    .parse(profileStr)
+    // 试图从 json 映射到 List[Map[String, Any]] 这种数据类型
+    // 帮助 extract 方法在运行时正确地识别 List[Map[String, Any]] 的类型结构
+    .extract[List[Map[String, Any]]](DefaultFormats /* 默认的格式化器 */, manifest[List[Map[String, Any]]])
   for (coreid <- 0 until numCores) {
     profiles.filter(_.contains("className")).zipWithIndex.foreach { case (rawProf, idx) =>
       val prof = rawProf.map { case (k, v) =>
@@ -71,39 +82,67 @@ class SimTop(profileName: String, numCores: Int) extends Module {
           case x         => (k, x)
         }
       }
+      // 这应该是反射了, 获取 className
       val constructor = Class.forName(prof("className").toString).getConstructors()(0)
       val args = constructor.getParameters().toSeq.map { param => prof(param.getName.toString) }
+      // args : _ 实际上就是 args : args
+      // _* 就是将 args 解包
+      // asInstanceOf[DifftestBundle] 就是将其转换为 DifftestBundle 类型
       val inst = constructor.newInstance(args: _*).asInstanceOf[DifftestBundle]
-      DifftestModule(inst, true, prof("delay").asInstanceOf[Int]).suggestName(s"gateway_${coreid}_$idx")
+      DifftestModule(gen = inst, dontCare = true, delay = prof("delay").asInstanceOf[Int])
+        .suggestName(s"gateway_${coreid}_$idx") // 创建的模块, 名字
     }
   }
+  // 找到 profiles 中对应的 cpu
   val dutInfo = profiles.find(_.contains("cpu")).get
   DifftestModule.finish(dutInfo("cpu").asInstanceOf[String])
 }
 
 abstract class DifftestApp extends App {
+
+  /**
+    * @brief gen params
+    *
+    * @param profile
+    * @param numCores
+    */
   case class GenParams(
     profile: Option[String] = None,
     numCores: Int = 1,
   )
+
+  /**
+    * @brief 将 args 解析为 GenParams 和 firrtlOpts
+    *
+    * @param args
+    * @return
+    */
   def parseArgs(args: Array[String]): (GenParams, Array[String]) = {
     val default = new GenParams()
     var firrtlOpts = Array[String]()
+
+    // 尾递归 ？
     @tailrec
     def nextOption(param: GenParams, list: List[String]): GenParams = {
       list match {
-        case Nil                            => param
+        case Nil => param
+        // --profile , 那么就是 GenParams -> profile -> Some(str)
         case "--profile" :: str :: tail     => nextOption(param.copy(profile = Some(str)), tail)
         case "--num-cores" :: value :: tail => nextOption(param.copy(numCores = value.toInt), tail)
-        case option :: tail =>
-          firrtlOpts :+= option
+        case option :: tail /* 相当于是 match case */ =>
+          firrtlOpts :+= option // 其他情况下, 将 option 添加到 firrtlOpts 中
           nextOption(param, tail)
       }
     }
+
     (nextOption(default, args.toList), firrtlOpts)
   }
+
+  // 设置 gateway, newArgs == args
   val newArgs = DifftestModule.parseArgs(args)
+
   val (param, firrtlOpts) = parseArgs(newArgs)
+
   val gen = if (param.profile.isDefined) { () =>
     new SimTop(param.profile.get, param.numCores)
   } else { () =>

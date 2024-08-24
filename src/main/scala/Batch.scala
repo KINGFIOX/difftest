@@ -24,6 +24,12 @@ import difftest.util.Delayer
 
 import scala.collection.mutable.ListBuffer
 
+/**
+  * @brief 参数用 case class
+  *
+  * @param config
+  * @param templateLen
+  */
 case class BatchParam(config: GatewayConfig, templateLen: Int) {
   val infoWidth = (new BatchInfo).getWidth
 

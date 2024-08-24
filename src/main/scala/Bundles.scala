@@ -23,22 +23,28 @@ sealed trait HasValid {
 }
 
 sealed trait HasAddress { this: HasValid =>
-  val numElements: Int
-
-  val address = UInt(log2Ceil(numElements).W)
+  val numElements: Int // 有几个元素
+  val address = UInt(log2Ceil(numElements).W) // 需要多少位来区分不同的元素, 编码
 }
 
+/**
+  * @brief 两个方面: HasValid 和 HasAddress
+  */
 sealed trait DifftestBaseBundle extends Bundle {
-  def hasValid: Boolean = this.isInstanceOf[HasValid]
-  def getValid: Bool = getValidOption.getOrElse(true.B)
+  // valid 信号就是: producer 表示数据是否有效
+  def hasValid: Boolean = this.isInstanceOf[HasValid] // 继承这个 DifftestBaseBundle 的, 是否有 hasValid 的 trait
+  // 获取 valid 信号
   def getValidOption: Option[Bool] = {
     this match {
       case b: HasValid => Some(b.valid)
       case _           => None
     }
   }
-
+  // 如果没有 hasValid 的 trait, 默认返回 true
+  def getValid: Bool = getValidOption.getOrElse(true.B)
+  // 是否更新 valid 信号
   def needUpdate: Option[Bool] = if (hasValid) Some(getValid) else None
+
   def hasAddress: Boolean = this.isInstanceOf[HasAddress]
   def getNumElements: Int = {
     this match {

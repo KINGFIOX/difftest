@@ -50,24 +50,46 @@ trait DiffTestIsInherited { this: DifftestBundle =>
   }
 }
 
+// 这种 this : DifftestBaseBundle 语法, 表示约束
+// 实现了这种 DifftestBundle trait 也必须实现 DifftestBaseBundle
 sealed trait DifftestBundle extends Bundle with DifftestWithCoreid { this: DifftestBaseBundle =>
   def bits: DifftestBaseBundle = this
 
   // Used to detect the number of cores. Must be used only by one Bundle.
   def isUniqueIdentifier: Boolean = false
+
+  val desiredCppName: String // 抽象字段, 需要子类实现
+
+  /* ---------- squashed ---------- */
+
   // A desired offset in the C++ struct can be specified.
   val desiredOffset: Int = 999
-
-  val desiredCppName: String
   def desiredModuleName: String = {
     val className = {
+      // $ -> .
+      // Diff -> Difftest
       val name = this.getClass.getName.replace("$", ".").replace("Diff", "Difftest")
+      // 根据 squashQueue 字段, 选择是否去掉 Queue
       if (squashQueue) name.replace("Queue", "") else name
     }
     className.split("\\.").filterNot(_.forall(java.lang.Character.isDigit)).last
   }
+  def order: (Int, String) = (desiredOffset, desiredModuleName) // 结构体 字段
 
-  def order: (Int, String) = (desiredOffset, desiredModuleName)
+  // squashed 就是将多个 DifftestBundle 压缩成一个 ? 虽然我还不懂 (
+  // returns Bool indicating whether `this` bundle can be squashed with `base`
+  def supportsSquashBase: Bool = if (hasValid) !getValid else true.B // 如果 HasValid 并且 valid = false.B, 则可以进行压缩
+  def supportsSquash(base: DifftestBundle): Bool = supportsSquashBase
+  // returns a seq of Group name of this bundle, Default: REF
+  // Only bundles with same GroupName will affect others' squash state.
+  // Some bundle will have several GroupName, such as LoadEvent
+  // Optional GroupName: REF / GOLDEN-MEM
+  val squashGroup: Seq[String] = Seq("REF") // 返回一个字符串序列, 默认是 Seq("REF")
+  // returns a squashed, right-value Bundle. Default: overriding `base` with `this`
+  def squash(base: DifftestBundle): DifftestBundle = this // 返回一个 压缩后的内容, 默认是 this
+  def squashQueue: Boolean = false // 指示, 是否启用队列压缩
+
+  /* ---------- indexed ---------- */
 
   def isIndexed: Boolean = this.isInstanceOf[DifftestWithIndex]
   def getIndex: Option[UInt] = {
@@ -77,13 +99,19 @@ sealed trait DifftestBundle extends Bundle with DifftestWithCoreid { this: Difft
     }
   }
 
+  /* ---------- flatten ---------- */
+
   protected val needFlatten: Boolean = false
   def isFlatten: Boolean = hasAddress && this.needFlatten
 
+  /* ---------- diffElements ---------- */
+
   // Elements without clock, coreid, and index.
   def diffElements: Seq[(String, Seq[UInt])] = {
-    val filteredElements = Seq("clock", "coreid", "index")
+    val filteredElements = Seq("clock", "coreid", "index") // 这些不用参与 difftest 的比较, 过滤掉
+    // elements 是 chisel3.Bundle 的一个字段, 返回一个 Map[String, Data], 其中 String 是字段名, Data 是字段值
     val raw = elements.toSeq.reverse.filterNot(e => filteredElements.contains(e._1))
+    // 相当于是标准化数据格式
     raw.map { case (s, data) =>
       data match {
         case v: Vec[_] => (s, Some(v.asInstanceOf[Vec[UInt]]))
@@ -92,19 +120,26 @@ sealed trait DifftestBundle extends Bundle with DifftestWithCoreid { this: Difft
           println(s"Unknown type: ($s, $data)")
           (s, None)
       }
-    }.map(x => (x._1, x._2.get))
+    }.map(x => (x._1, x._2.get /* get -> 获取 Some(_) 的值, 否则抛出异常 */ ))
   }
   // Sizes of the DiffTest elements.
   private def diffSizes(round: Int): Seq[Seq[Int]] = {
-    diffElements.map(_._2.map(u => (u.getWidth + round - 1) / round))
+    diffElements.map(_._2.map(u => (u.getWidth + round - 1) / round) /* 向上取整 */ )
   }
+
+  /* ---------- to cpp ---------- */
 
   def toCppDeclMacro: String = {
     val macroName = s"CONFIG_DIFFTEST_${desiredModuleName.toUpperCase.replace("DIFFTEST", "")}"
     s"#define $macroName"
   }
+
+  // TODO 我觉得这里要放一个 例子
+
+  // 产生 cpp 的 结构体
   def toCppDeclaration(packed: Boolean): String = {
     val cpp = ListBuffer.empty[String]
+    // __attribute__((packed)) 不会有冗余的 padding
     val attribute = if (packed) "__attribute__((packed))" else ""
     cpp += s"typedef struct $attribute {"
     for (((name, elem), size) <- diffElements.zip(diffSizes(8))) {
@@ -118,6 +153,8 @@ sealed trait DifftestBundle extends Bundle with DifftestWithCoreid { this: Difft
     cpp += s"} ${desiredModuleName};"
     cpp.mkString("\n")
   }
+
+  /* ---------- to trace ---------- */
 
   def toTraceDeclaration: String = {
     def byteWidth(data: Data) = (data.getWidth + 7) / 8 * 8
@@ -134,24 +171,17 @@ sealed trait DifftestBundle extends Bundle with DifftestWithCoreid { this: Difft
     cpp.mkString("\n")
   }
 
+  /* ---------- to json ---------- */
+
   def toJsonProfile: Map[String, Any] = Map("className" -> this.getClass.getName)
 
-  // returns a Seq indicating the udpate dependencies. Default: empty
+  /* ---------- valid ---------- */
+
+  // returns a Seq indicating the update dependencies. Default: empty
   // Only when one of the dependencies is valid, this bundle is updated.
   val updateDependency: Seq[String] = Seq()
 
-  // returns Bool indicating whether `this` bundle can be squashed with `base`
-  def supportsSquash(base: DifftestBundle): Bool = supportsSquashBase
-  def supportsSquashBase: Bool = if (hasValid) !getValid else true.B
-  // returns a seq of Group name of this bundle, Default: REF
-  // Only bundles with same GroupName will affect others' squash state.
-  // Some bundle will have several GroupName, such as LoadEvent
-  // Optional GroupName: REF / GOLDENMEM
-  val squashGroup: Seq[String] = Seq("REF")
-  // returns a squashed, right-value Bundle. Default: overriding `base` with `this`
-  def squash(base: DifftestBundle): DifftestBundle = this
-  def squashQueue: Boolean = false
-
+  // chisel3.Bundle.Valid 有两个字段, valid 和 bits
   // When enable squash, we append valid signal for DifftestBundle
   def genValidBundle(valid: Bool): Valid[DifftestBundle] = {
     val gen = Wire(Valid(chiselTypeOf(this)))
@@ -161,8 +191,10 @@ sealed trait DifftestBundle extends Bundle with DifftestWithCoreid { this: Difft
   }
   def genValidBundle: Valid[DifftestBundle] = genValidBundle(this.getValid)
 
+  /* ---------- byte align ---------- */
+
   // Byte align all elements
-  def getByteAlignElems(isTrace: Boolean): Seq[(String, Data)] = {
+  def getByteAlignElems(isTrace: Boolean): Seq[(String /* attribute name */, Data)] = {
     def byteAlign(data: Data): UInt = {
       val width: Int = (data.getWidth + 7) / 8 * 8
       data.asTypeOf(UInt(width.W))
@@ -438,6 +470,12 @@ object DifftestModule {
   private val vMacros = ListBuffer.empty[String]
   private val jsonProfiles = ListBuffer.empty[Map[String, Any]]
 
+  /**
+    * @brief 解析 args 中的 --difftest-config 参数, 并对 GateWay 进行配置(副作用)
+    *
+    * @param args
+    * @return
+    */
   def parseArgs(args: Array[String]): Array[String] = {
     @tailrec
     def nextOption(args: Array[String], list: List[String]): Array[String] = {
@@ -445,7 +483,10 @@ object DifftestModule {
         case Nil => args
         case "--difftest-config" :: config :: tail =>
           Gateway.setConfig(config)
+          // 删掉 --difftest-config 和他后面的一个 arg
           nextOption(args.patch(args.indexOf("--difftest-config"), Nil, 2), tail)
+        // 跳过非 --difftest-config 的 arg
+        // 对于 args 其实是不变的返回的
         case option :: tail => nextOption(args, tail)
       }
     }
