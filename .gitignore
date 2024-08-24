@@ -361,4 +361,5 @@ stack.info*
 *.bin
 
 !ready-to-run/*
+.direnv/
 

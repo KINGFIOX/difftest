@@ -58,6 +58,7 @@ case class GatewayConfig(
   def needEndpoint: Boolean =
     hasGlobalEnable || hasDutZone || isBatch || isSquash || hierarchicalWiring || traceDump || traceLoad
   def needPreprocess: Boolean = hasDutZone || isBatch || isSquash || needTraceInfo
+
   // Macros Generation for Cpp and Verilog
   def cppMacros: Seq[String] = {
     val macros = ListBuffer.empty[String]
@@ -72,6 +73,7 @@ case class GatewayConfig(
     if (traceDump || traceLoad) macros += "CONFIG_DIFFTEST_IOTRACE"
     macros.toSeq
   }
+
   def vMacros: Seq[String] = {
     val macros = ListBuffer.empty[String]
     macros += s"CONFIG_DIFFTEST_STEPWIDTH ${stepWidth}"
@@ -81,6 +83,10 @@ case class GatewayConfig(
     if (traceDump || traceLoad) macros += "CONFIG_DIFFTEST_IOTRACE"
     macros.toSeq
   }
+
+  // 有 replay 就有 squash
+  // 有 internal step 就有 batch
+  // 暂不支持 dump 和 load 同时存在
   def check(): Unit = {
     if (hasReplay) require(isSquash)
     if (hasInternalStep) require(isBatch)
@@ -93,10 +99,12 @@ case class GatewayResult(
   cppMacros: Seq[String] = Seq(),
   vMacros: Seq[String] = Seq(),
   instances: Seq[DifftestBundle] = Seq(),
+  // option
   structPacked: Option[Boolean] = None,
   exit: Option[UInt] = None,
   step: Option[UInt] = None,
 ) {
+  // 重载运算符
   def +(that: GatewayResult): GatewayResult = {
     GatewayResult(
       cppMacros = cppMacros ++ that.cppMacros,
@@ -109,6 +117,9 @@ case class GatewayResult(
   }
 }
 
+/**
+  * @brief GateWay 用于: 管理配置、实例创建、结果收集
+  */
 object Gateway {
   private val instanceWithDelay = ListBuffer.empty[(DifftestBundle, Int)]
   private var config = GatewayConfig()
@@ -133,7 +144,7 @@ object Gateway {
   }
 
   def apply[T <: DifftestBundle](gen: T, delay: Int): T = {
-    val bundle = WireInit(0.U.asTypeOf(gen))
+    val bundle = WireInit(0.U.asTypeOf(gen)) // difftest bundle
     if (!config.traceLoad) {
       if (config.needEndpoint) {
         val packed = WireInit(bundle.asUInt)
@@ -149,15 +160,18 @@ object Gateway {
   }
 
   def collect(): GatewayResult = {
+    // config.exitOnAssertions 为 true 时，添加 exit
     val exit = Option.when(config.exitOnAssertions) {
-      val asserted = RegInit(false.B)
-      VerificationExtractor.sink(asserted)
+      val asserted = RegInit(false.B) // asserted 是一个 bool 寄存器, 初始值为 false, 用于存储 assert 状态
+      VerificationExtractor.sink(asserted) // 将 assert 寄存器的值传递给某个 sink(提取器
       // Holds 1 after any assertion is asserted.
       RegEnable(1.U(64.W), 0.U(64.W), asserted)
     }
-    val instances = instanceWithDelay.map(_._1).toSeq
-    val sink = if (config.needEndpoint) {
+    val instances /* : Seq[DifftestBundle] */ = instanceWithDelay.map(_._1).toSeq // 硬件实例序列
+    val sink = if (config.needEndpoint) { // 硬件设计中, endpoint 通常是: 接口模块、数据传输的端点、中间节点
+      // 这里可能是: 是否需要数据处理点 ？
       val gatewayIn = if (config.traceLoad) {
+        // trace 跟踪 ?
         MixedVecInit(Trace.load(instances).toSeq.map(_.asUInt))
       } else {
         val packed = WireInit(0.U.asTypeOf(MixedVec(instances.map(gen => UInt(gen.getWidth.W)))))

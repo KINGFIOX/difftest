@@ -466,7 +466,7 @@ trait DifftestModule[T <: DifftestBundle] {
 object DifftestModule {
   private val enabled = true
   private val instances = ListBuffer.empty[DifftestBundle]
-  private val cppMacros = ListBuffer.empty[String]
+  private val cppMacros = ListBuffer.empty[String] //
   private val vMacros = ListBuffer.empty[String]
   private val jsonProfiles = ListBuffer.empty[Map[String, Any]]
 
@@ -498,7 +498,7 @@ object DifftestModule {
     dontCare: Boolean = false,
     delay: Int = 0,
   ): T = {
-    val difftest: T = Wire(gen)
+    val difftest: T = Wire(gen) // wire difftest
     if (enabled) {
       Gateway(gen, delay) := difftest
     }
@@ -561,7 +561,7 @@ object DifftestModule {
     difftestCpp += ""
 
     cppMacros.foreach(m => difftestCpp += s"#define $m")
-    difftestCpp += ""
+    difftestCpp += "" // 换行
 
     val cpu_s = cpu.replace("-", "_").replace(" ", "").toUpperCase
     difftestCpp += s"#define CPU_$cpu_s"
@@ -693,7 +693,7 @@ class LogCtrlIO extends Bundle {
 }
 
 // UART IO, if needed, should be inited in SimTop IO
-// If not needed, just hardwire all output to 0
+// If not needed, just hard-wire all output to 0
 class UARTIO extends Bundle {
   val out = new Bundle {
     val valid = Output(Bool())

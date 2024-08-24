@@ -26,6 +26,7 @@ private class Delayer[T <: Data](gen: T, n_cycles: Int) extends Module {
 
 private class DelayReg[T <: Data](gen: T, n_cycles: Int) extends Delayer(gen, n_cycles) {
   var r = WireInit(i)
+  // 包几层 RegNext
   for (_ <- 0 until n_cycles) {
     r = RegNext(r, 0.U.asTypeOf(gen))
   }
@@ -34,14 +35,15 @@ private class DelayReg[T <: Data](gen: T, n_cycles: Int) extends Delayer(gen, n_
 
 private class DelayMem[T <: Data](gen: T, n_cycles: Int) extends Delayer(gen, n_cycles) {
   val mem = Mem(n_cycles, chiselTypeOf(gen))
-  val ptr = RegInit(0.U(log2Ceil(n_cycles).W))
-  val init_flag = RegInit(false.B)
-  mem(ptr) := i
+  val ptr = RegInit(0.U(log2Ceil(n_cycles).W)) // 用于指示当前写入的位置
+  val init_flag = RegInit(false.B) // 用于指示是否已经初始化
+  mem(ptr) := i // io input
   ptr := ptr + 1.U
   when(ptr === (n_cycles - 1).U) {
     init_flag := true.B
     ptr := 0.U
   }
+  // 相当于是: 每周期移位
   o := Mux(init_flag, mem(ptr), 0.U.asTypeOf(gen))
 }
 
@@ -55,7 +57,7 @@ object Delayer {
       }
       delayer.i := gen
       delayer.o
-    } else {
+    } else { // 否则就是: 没有延迟
       gen
     }
   }
